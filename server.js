@@ -145,7 +145,7 @@ app.get("/status", (req, res) => {
 
 // Server listen
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "localhost";
+const HOST = process.env.HOST || "145.223.98.156";
 
 server.listen(PORT, HOST, () => {
 	console.log(`🚀 Server running at http://${HOST}:${PORT}`);
