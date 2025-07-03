@@ -42,29 +42,6 @@
 			button.stop {
 				background-color: #6c757d;
 			}
-			.audio-controls {
-				background-color: white;
-				padding: 20px;
-				border-radius: 8px;
-				margin-bottom: 20px;
-				box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-			}
-			.audio-controls h3 {
-				margin-top: 0;
-				color: #333;
-			}
-			.volume-control {
-				margin: 10px 0;
-			}
-			.volume-control label {
-				display: block;
-				margin-bottom: 5px;
-				font-weight: bold;
-			}
-			.volume-slider {
-				width: 100%;
-				margin-bottom: 10px;
-			}
 			.status {
 				padding: 10px;
 				border-radius: 4px;
@@ -96,20 +73,6 @@
 		<h2>🎙️ Conference Admin Panel</h2>
 
 		<div class="audio-controls">
-			<h3>Audio Controls</h3>
-			<div class="volume-control">
-				<label for="volumeSlider"
-					>Volume: <span id="volumeValue">80%</span></label
-				>
-				<input
-					type="range"
-					id="volumeSlider"
-					class="volume-slider"
-					min="0"
-					max="100"
-					value="80"
-				/>
-			</div>
 			<div id="connectionStatus" class="status disconnected">Connecting...</div>
 			<div id="audioStatus" class="status">No audio streaming</div>
 		</div>
@@ -118,42 +81,19 @@
 
 		<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 		<script>
-			const socket = io("http://145.223.98.156:3000");
-
+			const socket = io();
 			const requestsDiv = document.getElementById("requests");
 			const connectionStatus = document.getElementById("connectionStatus");
 			const audioStatus = document.getElementById("audioStatus");
-			const volumeSlider = document.getElementById("volumeSlider");
-			const volumeValue = document.getElementById("volumeValue");
-
-			let audioContext = null;
 			let currentVolume = 0.8;
 			let isPlaying = false;
 
-			// Initialize Web Audio API
-			function initAudioContext() {
-				if (!audioContext) {
-					audioContext = new (window.AudioContext ||
-						window.webkitAudioContext)();
-				}
-				return audioContext;
-			}
-
-			// Volume control
-			volumeSlider.addEventListener("input", (e) => {
-				currentVolume = e.target.value / 100;
-				volumeValue.textContent = e.target.value + "%";
-			});
-
-			// Socket connection events
 			socket.on("connect", () => {
-				console.log("Connected to server");
 				connectionStatus.textContent = "✓ Connected to server";
 				connectionStatus.className = "status connected";
 			});
 
 			socket.on("disconnect", () => {
-				console.log("Disconnected from server");
 				connectionStatus.textContent = "✗ Disconnected from server";
 				connectionStatus.className = "status disconnected";
 			});
@@ -170,53 +110,36 @@
 					const reqDiv = document.createElement("div");
 					reqDiv.className = "request";
 					reqDiv.innerHTML = `
-						<strong>${req.senderName}</strong>
-						${
-							req.isTalking
-								? '<span class="talking-indicator">🎤 Currently Talking</span>'
-								: ""
+          <strong>${req.senderName}</strong>
+          ${
+						req.isTalking
+							? '<span class="talking-indicator">🎤 Currently Talking</span>'
+							: ""
+					}
+          <div class="buttons">
+            ${
+							!req.isTalking
+								? `
+              <button onclick="accept('${req.socketId}')">Accept</button>
+              <button class="reject" onclick="reject('${req.socketId}')">Reject</button>
+            `
+								: `
+              <button class="stop" onclick="stop('${req.socketId}')">Stop</button>
+            `
 						}
-						<div class="buttons">
-							${
-								!req.isTalking
-									? `
-								<button onclick="accept('${req.socketId}')">Accept</button>
-								<button class="reject" onclick="reject('${req.socketId}')">Reject</button>
-							`
-									: `
-								<button class="stop" onclick="stop('${req.socketId}')">Stop</button>
-							`
-							}
-						</div>
-					`;
+          </div>
+        `;
 					requestsDiv.appendChild(reqDiv);
 				});
 			});
 
-			socket.on("audio_stream", async (data) => {
+			socket.on("audio_stream", (data) => {
 				console.log("Received audio from:", data.senderName);
-				try {
-					await playAudioChunk(data.audio);
-				} catch (error) {
-					console.error("Error playing audio:", error);
-				}
+				playAudioChunk(data.audio, data.senderName);
 			});
 
-			socket.on("audio_done", () => {
-				console.log("Audio stream ended");
-				updateAudioStatus("Audio stream ended", false);
-			});
-
-			// Play audio chunk using Web Audio API
-			async function playAudioChunk(base64Audio) {
+			function playAudioChunk(base64Audio, senderName) {
 				try {
-					const audioCtx = initAudioContext();
-
-					// Resume audio context if suspended
-					if (audioCtx.state === "suspended") {
-						await audioCtx.resume();
-					}
-
 					// Convert base64 to ArrayBuffer
 					const binaryString = atob(base64Audio);
 					const bytes = new Uint8Array(binaryString.length);
@@ -224,39 +147,30 @@
 						bytes[i] = binaryString.charCodeAt(i);
 					}
 
-					// Decode audio data
-					const audioBuffer = await audioCtx.decodeAudioData(bytes.buffer);
-
-					// Create audio source
-					const source = audioCtx.createBufferSource();
-					const gainNode = audioCtx.createGain();
-
-					source.buffer = audioBuffer;
-					gainNode.gain.value = currentVolume;
-
-					// Connect nodes
-					source.connect(gainNode);
-					gainNode.connect(audioCtx.destination);
+					// Create Blob and URL
+					const blob = new Blob([bytes], { type: "audio/mp4" });
+					const url = URL.createObjectURL(blob);
 
 					// Play audio
-					source.start();
+					const audio = new Audio(url);
+					audio.volume = currentVolume;
+					audio.play();
 
-					updateAudioStatus("🎵 Playing audio...", true);
+					audioStatus.textContent = `🎵 Playing audio from ${senderName}...`;
+					audioStatus.className = "status playing";
+					isPlaying = true;
 
-					// Update status after audio ends
-					setTimeout(() => {
-						updateAudioStatus("Waiting for audio...", false);
-					}, audioBuffer.duration * 1000);
+					audio.onended = () => {
+						URL.revokeObjectURL(url);
+						audioStatus.textContent = "Ready for audio";
+						audioStatus.className = "status";
+						isPlaying = false;
+					};
 				} catch (error) {
-					console.error("Error playing audio:", error);
-					updateAudioStatus("Error playing audio", false);
+					console.error("Playback error:", error);
+					audioStatus.textContent = "Error playing audio";
+					audioStatus.className = "status";
 				}
-			}
-
-			function updateAudioStatus(message, playing) {
-				audioStatus.textContent = message;
-				audioStatus.className = playing ? "status playing" : "status";
-				isPlaying = playing;
 			}
 
 			function accept(socketId) {
@@ -270,18 +184,6 @@
 			function stop(socketId) {
 				socket.emit("stop_request", { socketId });
 			}
-
-			// Initialize audio context on first user interaction
-			document.addEventListener(
-				"click",
-				() => {
-					initAudioContext();
-				},
-				{ once: true }
-			);
-
-			// Initialize status
-			updateAudioStatus("Ready to receive audio", false);
 		</script>
 	</body>
 </html>
