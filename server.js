@@ -9,10 +9,9 @@ const server = http.createServer(app);
 
 const io = socketIo(server, {
 	cors: {
-		origin: "*",
+		origin: "*", // Allow all origins for now; change this for production!
 		methods: ["GET", "POST"],
 	},
-	maxHttpBufferSize: 1e8,
 });
 
 const requests = [];
@@ -29,124 +28,58 @@ app.get("/", (req, res) => {
 // Socket.IO logic
 io.on("connection", (socket) => {
 	console.log("✅ Client connected:", socket.id);
+
 	socket.emit("update_requests", requests);
 
 	socket.on("talk_request", (data) => {
-		const request = {
-			...data,
-			socketId: socket.id,
-			isTalking: false,
-			connectedAt: new Date().toISOString(),
-		};
+		const request = { ...data, socketId: socket.id };
 		requests.push(request);
 		io.emit("update_requests", requests);
-		console.log(`🟢 Talk request from ${data.senderName} (${socket.id})`);
+		console.log(`🟢 Talk request from ${data.senderName}`);
 	});
 
 	socket.on("accept_request", ({ socketId }) => {
-		const request = requests.find((req) => req.socketId === socketId);
-		if (request) {
-			io.to(socketId).emit("request_accepted");
-			request.isTalking = true;
-			request.acceptedAt = new Date().toISOString();
-			io.emit("update_requests", requests);
-			console.log(
-				`🟢 Request accepted for ${request.senderName} (${socketId})`
-			);
-		}
+		io.to(socketId).emit("request_accepted");
+		const index = requests.findIndex((req) => req.socketId === socketId);
+		if (index !== -1) requests[index].isTalking = true;
+		io.emit("update_requests", requests);
+		console.log(`🟢 Request accepted for ${socketId}`);
 	});
 
 	socket.on("reject_request", ({ socketId }) => {
-		const requestIndex = requests.findIndex((req) => req.socketId === socketId);
-		if (requestIndex !== -1) {
-			const request = requests[requestIndex];
-			io.to(socketId).emit("request_rejected");
-			requests.splice(requestIndex, 1);
-			io.emit("update_requests", requests);
-			console.log(
-				`🔴 Request rejected for ${request.senderName} (${socketId})`
-			);
-		}
+		io.to(socketId).emit("request_rejected");
+		const index = requests.findIndex((req) => req.socketId === socketId);
+		if (index !== -1) requests.splice(index, 1);
+		io.emit("update_requests", requests);
+		console.log(`🔴 Request rejected for ${socketId}`);
 	});
 
 	socket.on("stop_request", ({ socketId }) => {
-		const request = requests.find((req) => req.socketId === socketId);
-		if (request) {
-			io.to(socketId).emit("stop_talking");
-			request.isTalking = false;
-			request.stoppedAt = new Date().toISOString();
-			io.emit("update_requests", requests);
-			console.log(`🟡 Stopped talking: ${request.senderName} (${socketId})`);
-		}
+		io.to(socketId).emit("stop_talking");
+		const index = requests.findIndex((req) => req.socketId === socketId);
+		if (index !== -1) requests[index].isTalking = false;
+		io.emit("update_requests", requests);
+		console.log(`🟡 Stopped talking: ${socketId}`);
 	});
 
 	socket.on("audio_chunk", (data) => {
-		try {
-			if (!data || !data.audio || !data.senderName) {
-				console.error("❌ Invalid audio data received");
-				return;
-			}
-
-			const sender = requests.find(
-				(req) => req.senderName === data.senderName && req.isTalking
-			);
-			if (!sender) {
-				console.warn(`⚠️ Audio from unauthorized sender: ${data.senderName}`);
-				return;
-			}
-
-			console.log(`🎵 Audio chunk received from ${data.senderName}`);
-
-			io.emit("audio_stream", {
-				audio: data.audio,
-				senderName: data.senderName,
-				segmentIndex: data.segmentIndex,
-			});
-		} catch (error) {
-			console.error("❌ Error processing audio chunk:", error);
-		}
+		io.emit("audio_stream", data);
 	});
 
 	socket.on("audio_done", () => {
-		const request = requests.find((req) => req.socketId === socket.id);
-		if (request) {
-			console.log(`🎵 Audio stream ended for ${request.senderName}`);
-			io.emit("audio_done", { senderName: request.senderName });
-		}
+		io.emit("audio_done");
 	});
 
-	socket.on("disconnect", (reason) => {
-		console.log(`❌ Client disconnected: ${socket.id}, reason: ${reason}`);
-
-		const requestIndex = requests.findIndex(
-			(req) => req.socketId === socket.id
-		);
-		if (requestIndex !== -1) {
-			const request = requests[requestIndex];
-			requests.splice(requestIndex, 1);
-			io.emit("update_requests", requests);
-
-			if (request.isTalking) {
-				io.emit("audio_done", { senderName: request.senderName });
-			}
-		}
-	});
-});
-
-// Server status endpoint
-app.get("/status", (req, res) => {
-	res.json({
-		status: "running",
-		connectedClients: io.engine.clientsCount,
-		activeRequests: requests.length,
-		talkingUsers: requests.filter((req) => req.isTalking).length,
+	socket.on("disconnect", () => {
+		console.log("❌ Disconnected:", socket.id);
+		const index = requests.findIndex((req) => req.socketId === socket.id);
+		if (index !== -1) requests.splice(index, 1);
+		io.emit("update_requests", requests);
 	});
 });
 
 // Server listen
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "145.223.98.156";
-
-server.listen(PORT, HOST, () => {
-	console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+server.listen(PORT, () => {
+	console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
