@@ -80,6 +80,11 @@ io.on("connection", (socket) => {
 
 // Server listen
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-	console.log(`🚀 Server running at http://localhost:${PORT}`);
+// server.listen(PORT, () => {
+// 	console.log(`🚀 Server running at http://localhost:${PORT}`);
+// });
+
+server.listen(PORT, "0.0.0.0", () => {
+	console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+	console.log(`🌐 Accessible at http://145.223.98.156:${PORT}`);
 });
