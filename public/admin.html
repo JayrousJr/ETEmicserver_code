@@ -1,101 +1,107 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <title>Admin Panel</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 20px;
-    }
-    h2 {
-      color: #007bff;
-    }
-    .request {
-      border: 1px solid #ccc;
-      padding: 10px;
-      margin-top: 10px;
-      border-radius: 8px;
-    }
-    .buttons {
-      margin-top: 10px;
-    }
-    button {
-      margin-right: 10px;
-      padding: 6px 12px;
-      border: none;
-      border-radius: 4px;
-      color: #fff;
-      background-color: #007bff;
-      cursor: pointer;
-    }
-    button.reject {
-      background-color: #dc3545;
-    }
-    button.stop {
-      background-color: #6c757d;
-    }
-  </style>
-</head>
-<body>
-  <h2>Admin Panel</h2>
-  <div id="requests"></div>
+	<head>
+		<title>Admin Panel</title>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				padding: 20px;
+			}
+			h2 {
+				color: #007bff;
+			}
+			.request {
+				border: 1px solid #ccc;
+				padding: 10px;
+				margin-top: 10px;
+				border-radius: 8px;
+			}
+			.buttons {
+				margin-top: 10px;
+			}
+			button {
+				margin-right: 10px;
+				padding: 6px 12px;
+				border: none;
+				border-radius: 4px;
+				color: #fff;
+				background-color: #007bff;
+				cursor: pointer;
+			}
+			button.reject {
+				background-color: #dc3545;
+			}
+			button.stop {
+				background-color: #6c757d;
+			}
+		</style>
+	</head>
+	<body>
+		<h2>Admin Panel</h2>
+		<div id="requests"></div>
 
-  <audio id="audioPlayer" controls autoplay></audio>
+		<audio id="audioPlayer" controls autoplay></audio>
 
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script>
-    const socket = io('https://ete-844m.onrender.com'); // ✅ CONNECT TO DEPLOYED SERVER
+		<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+		<script>
+			const socket = io("http://145.223.98.156:3000"); // ✅ CONNECT TO DEPLOYED SERVER
 
-    const requestsDiv = document.getElementById('requests');
-    const audioPlayer = document.getElementById('audioPlayer');
-    let mediaSource = new MediaSource();
-    let sourceBuffer;
+			const requestsDiv = document.getElementById("requests");
+			const audioPlayer = document.getElementById("audioPlayer");
+			let mediaSource = new MediaSource();
+			let sourceBuffer;
 
-    mediaSource.addEventListener("sourceopen", () => {
-      sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
-    });
+			mediaSource.addEventListener("sourceopen", () => {
+				sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+			});
 
-    audioPlayer.src = URL.createObjectURL(mediaSource);
+			audioPlayer.src = URL.createObjectURL(mediaSource);
 
-    socket.on('update_requests', (requests) => {
-      requestsDiv.innerHTML = '';
-      requests.forEach(req => {
-        const reqDiv = document.createElement('div');
-        reqDiv.className = 'request';
-        reqDiv.innerHTML = `<strong>${req.senderName}</strong>
+			socket.on("update_requests", (requests) => {
+				requestsDiv.innerHTML = "";
+				requests.forEach((req) => {
+					const reqDiv = document.createElement("div");
+					reqDiv.className = "request";
+					reqDiv.innerHTML = `<strong>${req.senderName}</strong>
           <div class="buttons">
             <button onclick="accept('${req.socketId}')">Accept</button>
-            <button class="reject" onclick="reject('${req.socketId}')">Reject</button>
-            ${req.isTalking ? `<button class="stop" onclick="stop('${req.socketId}')">Stop</button>` : ''}
+            <button class="reject" onclick="reject('${
+							req.socketId
+						}')">Reject</button>
+            ${
+							req.isTalking
+								? `<button class="stop" onclick="stop('${req.socketId}')">Stop</button>`
+								: ""
+						}
           </div>`;
-        requestsDiv.appendChild(reqDiv);
-      });
-    });
+					requestsDiv.appendChild(reqDiv);
+				});
+			});
 
-    socket.on('audio_stream', ({ audio }) => {
-      const audioBlob = Uint8Array.from(atob(audio), c => c.charCodeAt(0));
-      if (sourceBuffer && !sourceBuffer.updating) {
-        sourceBuffer.appendBuffer(audioBlob);
-      }
-    });
+			socket.on("audio_stream", ({ audio }) => {
+				const audioBlob = Uint8Array.from(atob(audio), (c) => c.charCodeAt(0));
+				if (sourceBuffer && !sourceBuffer.updating) {
+					sourceBuffer.appendBuffer(audioBlob);
+				}
+			});
 
-    socket.on('audio_done', () => {
-      if (mediaSource.readyState === 'open') {
-        mediaSource.endOfStream();
-      }
-    });
+			socket.on("audio_done", () => {
+				if (mediaSource.readyState === "open") {
+					mediaSource.endOfStream();
+				}
+			});
 
-    function accept(socketId) {
-      socket.emit('accept_request', { socketId });
-    }
+			function accept(socketId) {
+				socket.emit("accept_request", { socketId });
+			}
 
-    function reject(socketId) {
-      socket.emit('reject_request', { socketId });
-    }
+			function reject(socketId) {
+				socket.emit("reject_request", { socketId });
+			}
 
-    function stop(socketId) {
-      socket.emit('stop_request', { socketId });
-    }
-  </script>
-</body>
+			function stop(socketId) {
+				socket.emit("stop_request", { socketId });
+			}
+		</script>
+	</body>
 </html>
