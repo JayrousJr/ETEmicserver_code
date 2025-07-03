@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head><title>Client Simulator</title></head>
+<body>
+  <h2>Client Microphone Test</h2>
+  <button onclick="sendRequest()">Request to Talk</button>
+  <button onclick="startTalking()">Start Talking</button>
+  <button onclick="stopTalking()">Stop</button>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+
+    function sendRequest() {
+      socket.emit('talk_request', { senderName: 'Test User' });
+    }
+
+    let mediaRecorder;
+    let recording = false;
+
+    async function startTalking() {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.start(250); // send audio chunks every 250ms
+
+      mediaRecorder.ondataavailable = (e) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Audio = btoa(String.fromCharCode(...new Uint8Array(reader.result)));
+          socket.emit('audio_chunk', { audio: base64Audio });
+        };
+        reader.readAsArrayBuffer(e.data);
+      };
+
+      recording = true;
+    }
+
+    function stopTalking() {
+      if (mediaRecorder && recording) {
+        mediaRecorder.stop();
+        socket.emit('audio_done');
+        recording = false;
+      }
+    }
+
+    socket.on('request_accepted', () => alert('Request accepted'));
+    socket.on('request_rejected', () => alert('Request rejected'));
+    socket.on('stop_talking', () => {
+      stopTalking();
+      alert('Admin stopped the talk');
+    });
+  </script>
+</body>
+</html>
