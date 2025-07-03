@@ -22,15 +22,17 @@
 			}
 			.buttons {
 				margin-top: 10px;
+				display: flex;
+				gap: 10px;
 			}
 			button {
-				margin-right: 10px;
 				padding: 8px 16px;
 				border: none;
 				border-radius: 4px;
 				color: white;
 				cursor: pointer;
 				font-weight: bold;
+				flex: 1;
 			}
 			button.accept {
 				background-color: #28a745;
@@ -41,20 +43,52 @@
 			button.stop {
 				background-color: #6c757d;
 			}
-			.status-indicators {
-				margin: 20px 0;
+			.status-container {
+				background-color: #d4edda;
 				padding: 15px;
 				border-radius: 8px;
-			}
-			.connection-status {
-				background-color: #d4edda;
-				color: #155724;
+				margin-bottom: 20px;
 				border: 1px solid #c3e6cb;
 			}
-			.audio-status {
+			.audio-container {
 				background-color: #cce5ff;
-				color: #004085;
+				padding: 15px;
+				border-radius: 8px;
+				margin-bottom: 20px;
 				border: 1px solid #99ccff;
+			}
+			.verification-container {
+				background-color: #fff3cd;
+				padding: 15px;
+				border-radius: 8px;
+				margin-bottom: 20px;
+				border: 1px solid #ffeaa7;
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				gap: 15px;
+			}
+			.verification-item {
+				background-color: white;
+				padding: 10px;
+				border-radius: 8px;
+				text-align: center;
+			}
+			.verification-value {
+				font-size: 24px;
+				font-weight: bold;
+				color: #007bff;
+			}
+			.wave-container {
+				display: flex;
+				align-items: flex-end;
+				height: 100px;
+				gap: 3px;
+				margin: 15px 0;
+			}
+			.wave-bar {
+				width: 6px;
+				background-color: #4caf50;
+				border-radius: 3px;
 			}
 			.talking-indicator {
 				color: #28a745;
@@ -66,12 +100,33 @@
 	<body>
 		<h2>Conference Admin Panel</h2>
 
-		<div class="status-indicators connection-status">
+		<div class="status-container">
+			<strong>Connection Status:</strong>
 			<span id="connectionStatus">Connecting to server...</span>
 		</div>
 
-		<div class="status-indicators audio-status">
+		<div class="audio-container">
+			<strong>Audio Status:</strong>
 			<span id="audioStatus">No active audio</span>
+			<div class="wave-container" id="waveContainer"></div>
+		</div>
+
+		<div class="verification-container">
+			<div class="verification-item">
+				<div>Bytes Received</div>
+				<div class="verification-value" id="bytesReceived">0</div>
+				<div>KB</div>
+			</div>
+			<div class="verification-item">
+				<div>Chunks Received</div>
+				<div class="verification-value" id="chunksReceived">0</div>
+				<div>Packets</div>
+			</div>
+			<div class="verification-item">
+				<div>Active Speakers</div>
+				<div class="verification-value" id="activeSpeakers">0</div>
+				<div>Users</div>
+			</div>
 		</div>
 
 		<div id="requests"></div>
@@ -82,10 +137,18 @@
 			const requestsDiv = document.getElementById("requests");
 			const connectionStatus = document.getElementById("connectionStatus");
 			const audioStatus = document.getElementById("audioStatus");
+			const waveContainer = document.getElementById("waveContainer");
+			const bytesReceived = document.getElementById("bytesReceived");
+			const chunksReceived = document.getElementById("chunksReceived");
+			const activeSpeakers = document.getElementById("activeSpeakers");
 
 			let audioContext;
 			let currentAudioSource;
 			let isPlaying = false;
+			let totalBytes = 0;
+			let chunkCount = 0;
+			let speakers = new Set();
+			let waveBars = [];
 
 			socket.on("connect", () => {
 				connectionStatus.textContent = "✓ Connected to server";
@@ -109,20 +172,27 @@
 					reqDiv.className = "request";
 
 					let buttonsHTML = `
-          <button class="accept" onclick="acceptRequest('${req.socketId}')">Accept</button>
-          <button class="reject" onclick="rejectRequest('${req.socketId}')">Reject</button>
+          <div class="buttons">
+            <button class="accept" onclick="acceptRequest('${req.socketId}')">Accept</button>
+            <button class="reject" onclick="rejectRequest('${req.socketId}')">Reject</button>
         `;
 
 					if (req.isTalking) {
 						buttonsHTML += `<button class="stop" onclick="stopRequest('${req.socketId}')">Stop</button>`;
 					}
 
+					buttonsHTML += `</div>`;
+
 					reqDiv.innerHTML = `
-          <div><strong>${req.senderName}</strong></div>
-          ${
-						req.isTalking ? '<span class="talking-indicator">● Live</span>' : ""
-					}
-          <div class="buttons">${buttonsHTML}</div>
+          <div>
+            <strong>${req.senderName}</strong>
+            ${
+							req.isTalking
+								? '<span class="talking-indicator">● Live</span>'
+								: ""
+						}
+          </div>
+          ${buttonsHTML}
         `;
 
 					requestsDiv.appendChild(reqDiv);
@@ -131,8 +201,32 @@
 
 			socket.on("audio_stream", async (data) => {
 				try {
-					if (isPlaying) return;
-					isPlaying = true;
+					// Update verification stats
+					totalBytes += data.size;
+					chunkCount++;
+					speakers.add(data.senderName);
+
+					bytesReceived.textContent = Math.round(totalBytes / 1024);
+					chunksReceived.textContent = chunkCount;
+					activeSpeakers.textContent = speakers.size;
+
+					// Create wave bars
+					for (let i = 0; i < 5; i++) {
+						const height = 20 + Math.floor(Math.random() * 60);
+						const bar = document.createElement("div");
+						bar.className = "wave-bar";
+						bar.style.height = `${height}px`;
+						waveContainer.appendChild(bar);
+						waveBars.push(bar);
+					}
+
+					// Remove old bars
+					if (waveBars.length > 30) {
+						const oldBar = waveBars.shift();
+						oldBar.remove();
+					}
+
+					// Update audio status
 					audioStatus.textContent = `Playing audio from ${data.senderName}`;
 
 					// Initialize audio context if needed
@@ -164,11 +258,10 @@
 
 					currentAudioSource.onended = () => {
 						isPlaying = false;
-						audioStatus.textContent = "Audio finished";
+						audioStatus.textContent = "Ready for next audio";
 					};
 				} catch (error) {
 					console.error("Error playing audio:", error);
-					isPlaying = false;
 					audioStatus.textContent = "Error playing audio";
 				}
 			});
@@ -205,6 +298,16 @@
 				},
 				{ once: true }
 			);
+
+			// Reset counters every 15 seconds
+			setInterval(() => {
+				totalBytes = 0;
+				chunkCount = 0;
+				speakers.clear();
+				bytesReceived.textContent = "0";
+				chunksReceived.textContent = "0";
+				activeSpeakers.textContent = "0";
+			}, 15000);
 		</script>
 	</body>
 </html>

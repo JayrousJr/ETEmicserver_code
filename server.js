@@ -15,6 +15,7 @@ const io = socketIo(server, {
 });
 
 const requests = [];
+const audioSessions = {};
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
@@ -69,8 +70,39 @@ io.on("connection", (socket) => {
 	});
 
 	socket.on("audio_chunk", (data) => {
-		// Broadcast to all clients except the sender
-		socket.broadcast.emit("audio_stream", data);
+		// Verify audio data
+		if (!data.audio || !data.senderName || !data.token) {
+			console.log("Invalid audio chunk received");
+			return;
+		}
+
+		// Initialize session if new
+		if (!audioSessions[data.senderName]) {
+			audioSessions[data.senderName] = {
+				chunks: [],
+				lastTimestamp: Date.now(),
+				totalSize: 0,
+			};
+		}
+
+		const session = audioSessions[data.senderName];
+
+		// Verify token sequence (simplified)
+		const tokenTime = parseInt(data.token.substr(0, 8), 36);
+		if (tokenTime < session.lastTimestamp) {
+			console.log("Out-of-order audio chunk detected");
+			return;
+		}
+
+		// Update session
+		session.chunks.push(data);
+		session.totalSize += data.size;
+		session.lastTimestamp = data.timestamp;
+
+		console.log(`Audio received from ${data.senderName}: ${data.size} bytes`);
+
+		// Broadcast to all admins
+		io.emit("audio_stream", data);
 	});
 
 	socket.on("audio_done", () => {
