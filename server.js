@@ -9,61 +9,68 @@ const server = http.createServer(app);
 
 const io = socketIo(server, {
 	cors: {
-		origin: "*", // Allow all origins for now; change this for production!
+		origin: "*",
 		methods: ["GET", "POST"],
 	},
 });
 
 const requests = [];
 
-// Middleware
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
 
-// Serve Admin Panel
 app.get("/", (req, res) => {
 	res.sendFile(path.join(__dirname, "public", "admin.html"));
 });
 
-// Socket.IO logic
 io.on("connection", (socket) => {
-	console.log("✅ Client connected:", socket.id);
-
+	console.log("Client connected:", socket.id);
 	socket.emit("update_requests", requests);
 
 	socket.on("talk_request", (data) => {
-		const request = { ...data, socketId: socket.id };
+		const request = {
+			...data,
+			socketId: socket.id,
+			isTalking: false,
+		};
 		requests.push(request);
 		io.emit("update_requests", requests);
-		console.log(`🟢 Talk request from ${data.senderName}`);
+		console.log(`Talk request from ${data.senderName}`);
 	});
 
 	socket.on("accept_request", ({ socketId }) => {
-		io.to(socketId).emit("request_accepted");
-		const index = requests.findIndex((req) => req.socketId === socketId);
-		if (index !== -1) requests[index].isTalking = true;
-		io.emit("update_requests", requests);
-		console.log(`🟢 Request accepted for ${socketId}`);
+		const request = requests.find((req) => req.socketId === socketId);
+		if (request) {
+			io.to(socketId).emit("request_accepted");
+			request.isTalking = true;
+			io.emit("update_requests", requests);
+			console.log(`Request accepted for ${request.senderName}`);
+		}
 	});
 
 	socket.on("reject_request", ({ socketId }) => {
-		io.to(socketId).emit("request_rejected");
 		const index = requests.findIndex((req) => req.socketId === socketId);
-		if (index !== -1) requests.splice(index, 1);
-		io.emit("update_requests", requests);
-		console.log(`🔴 Request rejected for ${socketId}`);
+		if (index !== -1) {
+			requests.splice(index, 1);
+			io.to(socketId).emit("request_rejected");
+			io.emit("update_requests", requests);
+			console.log(`Request rejected for ${socketId}`);
+		}
 	});
 
 	socket.on("stop_request", ({ socketId }) => {
-		io.to(socketId).emit("stop_talking");
-		const index = requests.findIndex((req) => req.socketId === socketId);
-		if (index !== -1) requests[index].isTalking = false;
-		io.emit("update_requests", requests);
-		console.log(`🟡 Stopped talking: ${socketId}`);
+		const request = requests.find((req) => req.socketId === socketId);
+		if (request) {
+			request.isTalking = false;
+			io.to(socketId).emit("stop_talking");
+			io.emit("update_requests", requests);
+			console.log(`Stopped talking: ${socketId}`);
+		}
 	});
 
 	socket.on("audio_chunk", (data) => {
-		io.emit("audio_stream", data);
+		// Broadcast to all clients except the sender
+		socket.broadcast.emit("audio_stream", data);
 	});
 
 	socket.on("audio_done", () => {
@@ -71,14 +78,15 @@ io.on("connection", (socket) => {
 	});
 
 	socket.on("disconnect", () => {
-		console.log("❌ Disconnected:", socket.id);
+		console.log("Disconnected:", socket.id);
 		const index = requests.findIndex((req) => req.socketId === socket.id);
-		if (index !== -1) requests.splice(index, 1);
-		io.emit("update_requests", requests);
+		if (index !== -1) {
+			requests.splice(index, 1);
+			io.emit("update_requests", requests);
+		}
 	});
 });
 
-// Server listen
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "145.223.98.156";
 

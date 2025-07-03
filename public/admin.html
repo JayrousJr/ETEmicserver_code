@@ -6,27 +6,34 @@
 			body {
 				font-family: Arial, sans-serif;
 				padding: 20px;
+				background-color: #f5f5f5;
 			}
 			h2 {
 				color: #007bff;
+				text-align: center;
 			}
 			.request {
 				border: 1px solid #ccc;
-				padding: 10px;
-				margin-top: 10px;
+				padding: 15px;
+				margin: 10px 0;
 				border-radius: 8px;
+				background-color: white;
+				box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 			}
 			.buttons {
 				margin-top: 10px;
 			}
 			button {
 				margin-right: 10px;
-				padding: 6px 12px;
+				padding: 8px 16px;
 				border: none;
 				border-radius: 4px;
-				color: #fff;
-				background-color: #007bff;
+				color: white;
 				cursor: pointer;
+				font-weight: bold;
+			}
+			button.accept {
+				background-color: #28a745;
 			}
 			button.reject {
 				background-color: #dc3545;
@@ -34,74 +41,170 @@
 			button.stop {
 				background-color: #6c757d;
 			}
+			.status-indicators {
+				margin: 20px 0;
+				padding: 15px;
+				border-radius: 8px;
+			}
+			.connection-status {
+				background-color: #d4edda;
+				color: #155724;
+				border: 1px solid #c3e6cb;
+			}
+			.audio-status {
+				background-color: #cce5ff;
+				color: #004085;
+				border: 1px solid #99ccff;
+			}
+			.talking-indicator {
+				color: #28a745;
+				font-weight: bold;
+				margin-left: 10px;
+			}
 		</style>
 	</head>
 	<body>
-		<h2>Admin Panel</h2>
-		<div id="requests"></div>
+		<h2>Conference Admin Panel</h2>
 
-		<audio id="audioPlayer" controls autoplay></audio>
+		<div class="status-indicators connection-status">
+			<span id="connectionStatus">Connecting to server...</span>
+		</div>
+
+		<div class="status-indicators audio-status">
+			<span id="audioStatus">No active audio</span>
+		</div>
+
+		<div id="requests"></div>
 
 		<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 		<script>
-			const socket = io("http://145.223.98.156:3000"); // ✅ CONNECT TO DEPLOYED SERVER
-
+			const socket = io();
 			const requestsDiv = document.getElementById("requests");
-			const audioPlayer = document.getElementById("audioPlayer");
-			let mediaSource = new MediaSource();
-			let sourceBuffer;
+			const connectionStatus = document.getElementById("connectionStatus");
+			const audioStatus = document.getElementById("audioStatus");
 
-			mediaSource.addEventListener("sourceopen", () => {
-				sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+			let audioContext;
+			let currentAudioSource;
+			let isPlaying = false;
+
+			socket.on("connect", () => {
+				connectionStatus.textContent = "✓ Connected to server";
 			});
 
-			audioPlayer.src = URL.createObjectURL(mediaSource);
+			socket.on("disconnect", () => {
+				connectionStatus.textContent = "✗ Disconnected from server";
+			});
 
 			socket.on("update_requests", (requests) => {
 				requestsDiv.innerHTML = "";
+
+				if (requests.length === 0) {
+					requestsDiv.innerHTML =
+						'<div class="request">No active requests</div>';
+					return;
+				}
+
 				requests.forEach((req) => {
 					const reqDiv = document.createElement("div");
 					reqDiv.className = "request";
-					reqDiv.innerHTML = `<strong>${req.senderName}</strong>
-          <div class="buttons">
-            <button onclick="accept('${req.socketId}')">Accept</button>
-            <button class="reject" onclick="reject('${
-							req.socketId
-						}')">Reject</button>
-            ${
-							req.isTalking
-								? `<button class="stop" onclick="stop('${req.socketId}')">Stop</button>`
-								: ""
-						}
-          </div>`;
+
+					let buttonsHTML = `
+          <button class="accept" onclick="acceptRequest('${req.socketId}')">Accept</button>
+          <button class="reject" onclick="rejectRequest('${req.socketId}')">Reject</button>
+        `;
+
+					if (req.isTalking) {
+						buttonsHTML += `<button class="stop" onclick="stopRequest('${req.socketId}')">Stop</button>`;
+					}
+
+					reqDiv.innerHTML = `
+          <div><strong>${req.senderName}</strong></div>
+          ${
+						req.isTalking ? '<span class="talking-indicator">● Live</span>' : ""
+					}
+          <div class="buttons">${buttonsHTML}</div>
+        `;
+
 					requestsDiv.appendChild(reqDiv);
 				});
 			});
 
-			socket.on("audio_stream", ({ audio }) => {
-				const audioBlob = Uint8Array.from(atob(audio), (c) => c.charCodeAt(0));
-				if (sourceBuffer && !sourceBuffer.updating) {
-					sourceBuffer.appendBuffer(audioBlob);
+			socket.on("audio_stream", async (data) => {
+				try {
+					if (isPlaying) return;
+					isPlaying = true;
+					audioStatus.textContent = `Playing audio from ${data.senderName}`;
+
+					// Initialize audio context if needed
+					if (!audioContext) {
+						audioContext = new (window.AudioContext ||
+							window.webkitAudioContext)();
+					}
+
+					// Decode base64 audio
+					const binaryString = atob(data.audio);
+					const bytes = new Uint8Array(binaryString.length);
+					for (let i = 0; i < binaryString.length; i++) {
+						bytes[i] = binaryString.charCodeAt(i);
+					}
+
+					// Create audio buffer
+					const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
+
+					// Stop any currently playing audio
+					if (currentAudioSource) {
+						currentAudioSource.stop();
+					}
+
+					// Play audio
+					currentAudioSource = audioContext.createBufferSource();
+					currentAudioSource.buffer = audioBuffer;
+					currentAudioSource.connect(audioContext.destination);
+					currentAudioSource.start();
+
+					currentAudioSource.onended = () => {
+						isPlaying = false;
+						audioStatus.textContent = "Audio finished";
+					};
+				} catch (error) {
+					console.error("Error playing audio:", error);
+					isPlaying = false;
+					audioStatus.textContent = "Error playing audio";
 				}
 			});
 
 			socket.on("audio_done", () => {
-				if (mediaSource.readyState === "open") {
-					mediaSource.endOfStream();
+				isPlaying = false;
+				audioStatus.textContent = "Audio stream ended";
+				if (currentAudioSource) {
+					currentAudioSource.stop();
+					currentAudioSource = null;
 				}
 			});
 
-			function accept(socketId) {
+			function acceptRequest(socketId) {
 				socket.emit("accept_request", { socketId });
 			}
 
-			function reject(socketId) {
+			function rejectRequest(socketId) {
 				socket.emit("reject_request", { socketId });
 			}
 
-			function stop(socketId) {
+			function stopRequest(socketId) {
 				socket.emit("stop_request", { socketId });
 			}
+
+			// Initialize audio context on user interaction
+			document.addEventListener(
+				"click",
+				() => {
+					if (!audioContext) {
+						audioContext = new (window.AudioContext ||
+							window.webkitAudioContext)();
+					}
+				},
+				{ once: true }
+			);
 		</script>
 	</body>
 </html>
