@@ -88,18 +88,19 @@ io.on("connection", (socket) => {
 	});
 
 	socket.on("audio_chunk", (data) => {
+		console.log(
+			"Received audio_chunk from:",
+			data.senderName,
+			"size:",
+			data.size
+		);
 		const request = requests.find((req) => req.socketId === socket.id);
 		if (!request || request.isPaused) {
 			console.log("Audio chunk ignored: user paused or invalid");
 			return;
 		}
-		if (
-			!data.audio ||
-			!data.senderName ||
-			!data.token ||
-			data.size > 10 * 1024 * 1024
-		) {
-			console.log("Invalid or oversized audio chunk received");
+		if (!data.audio || !data.senderName || !data.token) {
+			console.log("Invalid audio chunk received");
 			return;
 		}
 
@@ -122,7 +123,9 @@ io.on("connection", (socket) => {
 		session.totalSize += data.size;
 		session.lastTimestamp = data.timestamp;
 
-		console.log(`Audio received from ${data.senderName}: ${data.size} bytes`);
+		console.log(
+			`Audio forwarded to admin from ${data.senderName}: ${data.size} bytes`
+		);
 
 		if (adminSocketId) {
 			io.to(adminSocketId).emit("audio_stream", data);
@@ -132,6 +135,7 @@ io.on("connection", (socket) => {
 	});
 
 	socket.on("audio_done", () => {
+		console.log("Audio done received");
 		if (adminSocketId) {
 			io.to(adminSocketId).emit("audio_done");
 		}
@@ -147,6 +151,7 @@ io.on("connection", (socket) => {
 		}
 		if (socket.id === adminSocketId) {
 			adminSocketId = null;
+			console.log("Admin disconnected");
 		}
 	});
 });
