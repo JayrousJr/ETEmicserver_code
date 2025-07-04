@@ -127,3 +127,5 @@ const HOST = process.env.HOST || "145.223.98.156";
 server.listen(PORT, HOST, () => {
 	console.log(`🚀 Server running at http://${HOST}:${PORT}`);
 });
+
+// play
