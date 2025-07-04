@@ -1,21 +1,37 @@
 const express = require("express");
 const http = require("http");
-const socketIo = require("socket.io");
+const { Server } = require("socket.io");
 const path = require("path");
 const cors = require("cors");
+const mediasoup = require("mediasoup");
 
 const app = express();
 const server = http.createServer(app);
-
-const io = socketIo(server, {
+const io = new Server(server, {
 	cors: {
 		origin: "*",
 		methods: ["GET", "POST"],
 	},
 });
 
-const requests = [];
-const audioSessions = {};
+const users = new Map(); // Store user states: { uid, socketId, status, senderName, role }
+let worker, router;
+
+async function setupMediasoup() {
+	worker = await mediasoup.createWorker();
+	router = await worker.createRouter({
+		mediaCodecs: [
+			{
+				kind: "audio",
+				mimeType: "audio/opus",
+				clockRate: 48000,
+				channels: 2,
+			},
+		],
+	});
+}
+
+setupMediasoup();
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
@@ -26,95 +42,81 @@ app.get("/", (req, res) => {
 
 io.on("connection", (socket) => {
 	console.log("Client connected:", socket.id);
-	socket.emit("update_requests", requests);
 
-	socket.on("talk_request", (data) => {
-		const request = {
-			...data,
-			socketId: socket.id,
-			isTalking: false,
-		};
-		requests.push(request);
-		io.emit("update_requests", requests);
-		console.log(`Talk request from ${data.senderName}`);
+	socket.on("join", ({ uid, senderName, role }) => {
+		users.set(uid, { socketId: socket.id, status: "idle", senderName, role });
+		socket.emit(
+			"update_users",
+			Array.from(users.entries()).map(([uid, data]) => ({ uid, ...data }))
+		);
+		io.emit(
+			"update_users",
+			Array.from(users.entries()).map(([uid, data]) => ({ uid, ...data }))
+		);
+		console.log(`${senderName} joined as ${role}`);
 	});
 
-	socket.on("accept_request", ({ socketId }) => {
-		const request = requests.find((req) => req.socketId === socketId);
-		if (request) {
-			io.to(socketId).emit("request_accepted");
-			request.isTalking = true;
-			io.emit("update_requests", requests);
-			console.log(`Request accepted for ${request.senderName}`);
-		}
+	socket.on("talk_request", ({ uid, senderName }) => {
+		users.set(uid, { ...users.get(uid), status: "pending" });
+		io.emit(
+			"update_users",
+			Array.from(users.entries()).map(([uid, data]) => ({ uid, ...data }))
+		);
+		console.log(`Talk request from ${senderName}`);
 	});
 
-	socket.on("reject_request", ({ socketId }) => {
-		const index = requests.findIndex((req) => req.socketId === socketId);
-		if (index !== -1) {
-			requests.splice(index, 1);
-			io.to(socketId).emit("request_rejected");
-			io.emit("update_requests", requests);
-			console.log(`Request rejected for ${socketId}`);
+	socket.on("admin_action", async ({ uid, action }) => {
+		if (users.get(users.get(uid)?.socketId)?.role !== "admin") return;
+		users.set(uid, { ...users.get(uid), status: action });
+		io.to(users.get(uid).socketId).emit("status_update", { status: action });
+		io.emit(
+			"update_users",
+			Array.from(users.entries()).map(([uid, data]) => ({ uid, ...data }))
+		);
+
+		if (action === "allowed") {
+			const transport = await router.createWebRtcTransport({
+				listenIps: [{ ip: "0.0.0.0", announcedIp: "145.223.98.156" }],
+			});
+			socket.emit("transport", {
+				id: transport.id,
+				iceParameters: transport.iceParameters,
+				iceCandidates: transport.iceCandidates,
+				dtlsParameters: transport.dtlsParameters,
+			});
+			io.to(users.get(uid).socketId).emit("start_stream", {
+				transportId: transport.id,
+			});
 		}
+		console.log(`Admin action: ${action} for ${uid}`);
 	});
 
-	socket.on("stop_request", ({ socketId }) => {
-		const request = requests.find((req) => req.socketId === socketId);
-		if (request) {
-			request.isTalking = false;
-			io.to(socketId).emit("stop_talking");
-			io.emit("update_requests", requests);
-			console.log(`Stopped talking: ${socketId}`);
-		}
+	socket.on("offer", ({ offer, from }) => {
+		io.to(users.get(from)?.socketId || "admin").emit("offer", { offer, from });
 	});
 
-	socket.on("audio_chunk", (data) => {
-		// Verify audio data
-		if (!data.audio || !data.senderName || !data.token) {
-			console.log("Invalid audio chunk received");
-			return;
-		}
-
-		// Initialize session if new
-		if (!audioSessions[data.senderName]) {
-			audioSessions[data.senderName] = {
-				chunks: [],
-				lastTimestamp: Date.now(),
-				totalSize: 0,
-			};
-		}
-
-		const session = audioSessions[data.senderName];
-
-		// Verify token sequence (simplified)
-		const tokenTime = parseInt(data.token.substr(0, 8), 36);
-		if (tokenTime < session.lastTimestamp) {
-			console.log("Out-of-order audio chunk detected");
-			return;
-		}
-
-		// Update session
-		session.chunks.push(data);
-		session.totalSize += data.size;
-		session.lastTimestamp = data.timestamp;
-
-		console.log(`Audio received from ${data.senderName}: ${data.size} bytes`);
-
-		// Broadcast to all admins
-		io.emit("audio_stream", data);
+	socket.on("answer", ({ answer, to }) => {
+		io.to(users.get(to)?.socketId || to).emit("answer", {
+			answer,
+			from: socket.id,
+		});
 	});
 
-	socket.on("audio_done", () => {
-		io.emit("audio_done");
+	socket.on("ice_candidate", ({ candidate, to }) => {
+		io.to(users.get(to)?.socketId || to).emit("ice_candidate", { candidate });
 	});
 
 	socket.on("disconnect", () => {
 		console.log("Disconnected:", socket.id);
-		const index = requests.findIndex((req) => req.socketId === socket.id);
-		if (index !== -1) {
-			requests.splice(index, 1);
-			io.emit("update_requests", requests);
+		for (const [uid, data] of users) {
+			if (data.socketId === socket.id) {
+				users.delete(uid);
+				io.emit(
+					"update_users",
+					Array.from(users.entries()).map(([uid, data]) => ({ uid, ...data }))
+				);
+				break;
+			}
 		}
 	});
 });
