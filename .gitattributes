@@ -1,2 +1,4 @@
+node_modules/
+# package-lock.json
 # Auto detect text files and perform LF normalization
 * text=auto
