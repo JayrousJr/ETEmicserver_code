@@ -9,18 +9,33 @@ const io = new Server(server, { cors: { origin: "*" } });
 
 let worker, router, transport, producer, consumer;
 
+const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "145.223.98.156";
+
 async function setupMediasoup() {
-	worker = await mediasoup.createWorker();
-	router = await worker.createRouter({
-		mediaCodecs: [
-			{
-				kind: "audio",
-				mimeType: "audio/opus",
-				clockRate: 48000,
-				channels: 1,
-			},
-		],
-	});
+	try {
+		worker = await mediasoup.createWorker({
+			logLevel: "debug", // Enable debug logs for troubleshooting
+		});
+		router = await worker.createRouter({
+			mediaCodecs: [
+				{
+					kind: "audio",
+					mimeType: "audio/opus",
+					clockRate: 48000,
+					channels: 2,
+					parameters: {
+						minptime: 10,
+						useinbandfec: 1,
+					},
+				},
+			],
+		});
+		console.log("Mediasoup router created successfully");
+	} catch (error) {
+		console.error("Mediasoup setup failed:", error.message);
+		process.exit(1);
+	}
 }
 
 setupMediasoup();
@@ -55,7 +70,7 @@ io.on("connection", (socket) => {
 			console.log(`Request accepted for ${clients.get(socketId).senderName}`);
 
 			transport = await router.createWebRtcTransport({
-				listenIps: [{ ip: "145.223.98.156", announcedIp: receiverIP }],
+				listenIps: [{ ip: `${HOST}`, announcedIp: "145.223.98.156" }],
 				enableUdp: true,
 				enableTcp: true,
 				preferUdp: true,
@@ -70,49 +85,61 @@ io.on("connection", (socket) => {
 	});
 
 	socket.on("offer", async ({ sdp }, callback) => {
-		producer = await transport.produce({
-			kind: "audio",
-			rtpParameters: sdp.rtpParameters,
-		});
-		console.log("Producer created:", producer.id);
-		callback({ id: producer.id });
+		try {
+			producer = await transport.produce({
+				kind: "audio",
+				rtpParameters: sdp.rtpParameters,
+			});
+			console.log("Producer created:", producer.id);
+			callback({ id: producer.id });
 
-		// Forward stream to admin
-		if (adminSocketId) {
-			const adminTransport = await router.createWebRtcTransport({
-				listenIps: [{ ip: "145.223.98.156", announcedIp: receiverIP }],
-				enableUdp: true,
-				enableTcp: true,
-				preferUdp: true,
-			});
-			io.to(adminSocketId).emit("transport_connect", {
-				id: adminTransport.id,
-				iceParameters: adminTransport.iceParameters,
-				iceCandidates: adminTransport.iceCandidates,
-				dtlsParameters: adminTransport.dtlsParameters,
-			});
+			if (adminSocketId) {
+				const adminTransport = await router.createWebRtcTransport({
+					listenIps: [{ ip: `${HOST}`, announcedIp: "145.223.98.156" }],
+					enableUdp: true,
+					enableTcp: true,
+					preferUdp: true,
+				});
+				io.to(adminSocketId).emit("transport_connect", {
+					id: adminTransport.id,
+					iceParameters: adminTransport.iceParameters,
+					iceCandidates: adminTransport.iceCandidates,
+					dtlsParameters: adminTransport.dtlsParameters,
+				});
 
-			consumer = await adminTransport.consume({
-				producerId: producer.id,
-				rtpCapabilities: router.rtpCapabilities,
-			});
-			io.to(adminSocketId).emit("consume", {
-				id: consumer.id,
-				producerId: producer.id,
-				kind: consumer.kind,
-				rtpParameters: consumer.rtpParameters,
-			});
+				consumer = await adminTransport.consume({
+					producerId: producer.id,
+					rtpCapabilities: router.rtpCapabilities,
+				});
+				io.to(adminSocketId).emit("consume", {
+					id: consumer.id,
+					producerId: producer.id,
+					kind: consumer.kind,
+					rtpParameters: consumer.rtpParameters,
+				});
+			}
+		} catch (error) {
+			console.error("Error handling offer:", error.message);
+			callback({ error: error.message });
 		}
 	});
 
 	socket.on("answer", async ({ sdp }) => {
-		await transport.setRemoteDescription(sdp);
-		console.log("Server set remote description");
+		try {
+			await transport.setRemoteDescription(sdp);
+			console.log("Server set remote description");
+		} catch (error) {
+			console.error("Error setting remote description:", error.message);
+		}
 	});
 
 	socket.on("ice_candidate", async ({ candidate }) => {
-		await transport.addIceCandidate(candidate);
-		console.log("Server added ICE candidate");
+		try {
+			await transport.addIceCandidate(candidate);
+			console.log("Server added ICE candidate");
+		} catch (error) {
+			console.error("Error adding ICE candidate:", error.message);
+		}
 	});
 
 	socket.on("stop_request", ({ socketId }) => {
@@ -165,8 +192,7 @@ io.on("connection", (socket) => {
 		res.sendFile(__dirname + "/admin.html");
 	});
 });
-const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "145.223.98.156";
-server.listen(PORT, HOST, () => {
-	console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+
+server.listen(3000, () => {
+	console.log("Server running on port 3000");
 });
