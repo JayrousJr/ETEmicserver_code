@@ -1,164 +1,171 @@
 const express = require("express");
 const http = require("http");
-const socketIo = require("socket.io");
-const path = require("path");
-const cors = require("cors");
+const { Server } = require("socket.io");
+const mediasoup = require("mediasoup");
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-	cors: {
-		origin: ["http://145.223.98.156:3000", "http://localhost:3000"],
-		methods: ["GET", "POST"],
-	},
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
+let worker, router, transport, producer, consumer;
+
+async function setupMediasoup() {
+	worker = await mediasoup.createWorker();
+	router = await worker.createRouter({
+		mediaCodecs: [
+			{
+				kind: "audio",
+				mimeType: "audio/opus",
+				clockRate: 48000,
+				channels: 1,
+			},
+		],
+	});
+}
+
+setupMediasoup();
+
+const clients = new Map();
 let adminSocketId = null;
-const requests = [];
-const audioSessions = {};
-
-app.use(cors());
-app.use(express.static(path.join(__dirname, "public")));
-
-app.get("/", (req, res) => {
-	res.sendFile(path.join(__dirname, "public", "admin.html"));
-});
 
 io.on("connection", (socket) => {
 	console.log("Client connected:", socket.id);
-	socket.emit("update_requests", requests);
+
+	socket.on("talk_request", async ({ senderName }) => {
+		clients.set(socket.id, { senderName, isTalking: false, isPaused: false });
+		console.log(`Talk request from ${senderName}`);
+		if (adminSocketId) {
+			io.to(adminSocketId).emit(
+				"update_requests",
+				Array.from(clients.values())
+			);
+		}
+	});
 
 	socket.on("register_admin", () => {
 		adminSocketId = socket.id;
-		console.log("Admin registered:", socket.id);
+		console.log("Admin registered:", adminSocketId);
+		socket.emit("update_requests", Array.from(clients.values()));
 	});
 
-	socket.on("talk_request", (data) => {
-		const request = {
-			...data,
-			socketId: socket.id,
-			isTalking: false,
-			isPaused: false,
-		};
-		requests.push(request);
-		io.emit("update_requests", requests);
-		console.log(`Talk request from ${data.senderName}`);
-	});
-
-	socket.on("accept_request", ({ socketId }) => {
-		const request = requests.find((req) => req.socketId === socketId);
-		if (request) {
+	socket.on("accept_request", async ({ socketId }) => {
+		if (clients.has(socketId)) {
+			clients.get(socketId).isTalking = true;
 			io.to(socketId).emit("request_accepted");
-			request.isTalking = true;
-			io.emit("update_requests", requests);
-			console.log(`Request accepted for ${request.senderName}`);
+			console.log(`Request accepted for ${clients.get(socketId).senderName}`);
+
+			transport = await router.createWebRtcTransport({
+				listenIps: [{ ip: "145.223.98.156", announcedIp: receiverIP }],
+				enableUdp: true,
+				enableTcp: true,
+				preferUdp: true,
+			});
+			socket.emit("transport_connect", {
+				id: transport.id,
+				iceParameters: transport.iceParameters,
+				iceCandidates: transport.iceCandidates,
+				dtlsParameters: transport.dtlsParameters,
+			});
 		}
 	});
 
-	socket.on("reject_request", ({ socketId }) => {
-		const index = requests.findIndex((req) => req.socketId === socketId);
-		if (index !== -1) {
-			delete audioSessions[requests[index].senderName];
-			requests.splice(index, 1);
-			io.to(socketId).emit("request_rejected");
-			io.emit("update_requests", requests);
-			console.log(`Request rejected for ${socketId}`);
+	socket.on("offer", async ({ sdp }, callback) => {
+		producer = await transport.produce({
+			kind: "audio",
+			rtpParameters: sdp.rtpParameters,
+		});
+		console.log("Producer created:", producer.id);
+		callback({ id: producer.id });
+
+		// Forward stream to admin
+		if (adminSocketId) {
+			const adminTransport = await router.createWebRtcTransport({
+				listenIps: [{ ip: "145.223.98.156", announcedIp: receiverIP }],
+				enableUdp: true,
+				enableTcp: true,
+				preferUdp: true,
+			});
+			io.to(adminSocketId).emit("transport_connect", {
+				id: adminTransport.id,
+				iceParameters: adminTransport.iceParameters,
+				iceCandidates: adminTransport.iceCandidates,
+				dtlsParameters: adminTransport.dtlsParameters,
+			});
+
+			consumer = await adminTransport.consume({
+				producerId: producer.id,
+				rtpCapabilities: router.rtpCapabilities,
+			});
+			io.to(adminSocketId).emit("consume", {
+				id: consumer.id,
+				producerId: producer.id,
+				kind: consumer.kind,
+				rtpParameters: consumer.rtpParameters,
+			});
 		}
 	});
 
-	socket.on("pause_request", ({ socketId }) => {
-		const request = requests.find((req) => req.socketId === socketId);
-		if (request) {
-			request.isPaused = !request.isPaused;
-			io.to(socketId).emit("pause_talking", { isPaused: request.isPaused });
-			io.emit("update_requests", requests);
-			console.log(`${request.isPaused ? "Paused" : "Resumed"}: ${socketId}`);
-		}
+	socket.on("answer", async ({ sdp }) => {
+		await transport.setRemoteDescription(sdp);
+		console.log("Server set remote description");
+	});
+
+	socket.on("ice_candidate", async ({ candidate }) => {
+		await transport.addIceCandidate(candidate);
+		console.log("Server added ICE candidate");
 	});
 
 	socket.on("stop_request", ({ socketId }) => {
-		const request = requests.find((req) => req.socketId === socketId);
-		if (request) {
-			delete audioSessions[request.senderName];
-			request.isTalking = false;
+		if (clients.has(socketId)) {
+			clients.get(socketId).isTalking = false;
 			io.to(socketId).emit("stop_talking");
-			io.emit("update_requests", requests);
-			console.log(`Stopped talking: ${socketId}`);
+			console.log(`Stop request for ${clients.get(socketId).senderName}`);
+			if (adminSocketId) {
+				io.to(adminSocketId).emit(
+					"update_requests",
+					Array.from(clients.values())
+				);
+			}
 		}
 	});
 
-	socket.on("audio_chunk", (data) => {
-		console.log(
-			"Received audio_chunk from:",
-			data.senderName,
-			"size:",
-			data.size
-		);
-		const request = requests.find((req) => req.socketId === socket.id);
-		if (!request || request.isPaused) {
-			console.log("Audio chunk ignored: user paused or invalid");
-			return;
-		}
-		if (!data.audio || !data.senderName || !data.token) {
-			console.log("Invalid audio chunk received");
-			return;
-		}
-
-		if (!audioSessions[data.senderName]) {
-			audioSessions[data.senderName] = {
-				chunks: [],
-				lastTimestamp: Date.now(),
-				totalSize: 0,
-			};
-		}
-
-		const session = audioSessions[data.senderName];
-		const tokenTime = parseInt(data.token.substr(0, 8), 36);
-		if (tokenTime < session.lastTimestamp) {
-			console.log("Out-of-order audio chunk detected");
-			return;
-		}
-
-		session.chunks.push(data);
-		session.totalSize += data.size;
-		session.lastTimestamp = data.timestamp;
-
-		console.log(
-			`Audio forwarded to admin from ${data.senderName}: ${data.size} bytes`
-		);
-
-		if (adminSocketId) {
-			io.to(adminSocketId).emit("audio_stream", data);
-		} else {
-			console.log("No admin connected, audio not sent");
-		}
-	});
-
-	socket.on("audio_done", () => {
-		console.log("Audio done received");
-		if (adminSocketId) {
-			io.to(adminSocketId).emit("audio_done");
+	socket.on("pause_request", ({ socketId, isPaused }) => {
+		if (clients.has(socketId)) {
+			clients.get(socketId).isPaused = isPaused;
+			io.to(socketId).emit("pause_talking", { isPaused });
+			console.log(
+				`Pause request for ${clients.get(socketId).senderName}: ${isPaused}`
+			);
+			if (adminSocketId) {
+				io.to(adminSocketId).emit(
+					"update_requests",
+					Array.from(clients.values())
+				);
+			}
 		}
 	});
 
 	socket.on("disconnect", () => {
-		console.log("Disconnected:", socket.id);
-		const index = requests.findIndex((req) => req.socketId === socket.id);
-		if (index !== -1) {
-			delete audioSessions[requests[index].senderName];
-			requests.splice(index, 1);
-			io.emit("update_requests", requests);
-		}
 		if (socket.id === adminSocketId) {
 			adminSocketId = null;
 			console.log("Admin disconnected");
+		} else if (clients.has(socket.id)) {
+			console.log(`Client disconnected: ${clients.get(socket.id).senderName}`);
+			clients.delete(socket.id);
+			if (adminSocketId) {
+				io.to(adminSocketId).emit(
+					"update_requests",
+					Array.from(clients.values())
+				);
+			}
 		}
+	});
+
+	app.get("/", (req, res) => {
+		res.sendFile(__dirname + "/admin.html");
 	});
 });
 
-const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "145.223.98.156";
-
-server.listen(PORT, HOST, () => {
-	console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+server.listen(3000, () => {
+	console.log("Server running on port 3000");
 });

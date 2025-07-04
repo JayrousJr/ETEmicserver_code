@@ -1,31 +1,144 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conference Admin Panel</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }
-        h1 { color: #007bff; }
-        #status, #audio-status { margin: 10px 0; }
-        #requests { margin-top: 20px; }
-        .request { padding: 10px; border: 1px solid #aaa; margin: 5px 0; border-radius: 5px; }
-        .request button { margin-left: 10px; padding: 5px 10px; cursor: pointer; }
-        .stats { display: flex; gap: 20px; margin-top: 20px; }
-        .stat-box { padding: 10px; border: 1px solid #aaa; border-radius: 5px; }
-    </style>
-</head>
-<body>
-    <h1burgoise>Conference Admin Panel</h1>
-    <div id="status">Connection Status: Connecting to server...</div>
-    <div id="audio-status">Audio Status: No active audio</div>
-    <div class="stats">
-        <div class="stat-box">Bytes Received: <span id="bytes">0</span> KB</div>
-        <div class="stat-box">Chunks Received: <span id="chunks">0</span> Packets</div>
-        <div class="stat-box">Active Speakers: <span id="speakers">0</span> Users</div>
-    </div>
-    <div id="requests"></div>
-    <script src="http://145.223.98.156:3000/socket.io/socket.io.js"></script>
-    <script src="admin.js"></script>
-</body>
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Admin Panel</title>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				margin: 20px;
+				background-color: #f4f4f4;
+			}
+			h1 {
+				color: #007bff;
+				text-align: center;
+			}
+			.request {
+				border: 1px solid #aaa;
+				padding: 10px;
+				margin: 10px 0;
+				border-radius: 5px;
+				background-color: #fff;
+			}
+			.request button {
+				margin: 5px;
+				padding: 8px;
+				border: none;
+				border-radius: 5px;
+				cursor: pointer;
+			}
+			.accept-btn {
+				background-color: #28a745;
+				color: #fff;
+			}
+			.reject-btn {
+				background-color: #dc3545;
+				color: #fff;
+			}
+			.pause-btn {
+				background-color: #ffc107;
+				color: #000;
+			}
+			.stop-btn {
+				background-color: #6c757d;
+				color: #fff;
+			}
+			#status {
+				margin: 20px 0;
+				text-align: center;
+				font-weight: bold;
+			}
+		</style>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+		<script>
+			const socket = io("http://145.223.98.156:3000");
+			const audioContext = new AudioContext({ sampleRate: 48000 });
+			let peerConnection;
+
+			socket.on("connect", () => {
+				console.log("Admin socket connected");
+				socket.emit("register_admin");
+				document.getElementById("status").textContent = "Connected to server";
+			});
+
+			socket.on("update_requests", (requests) => {
+				console.log("Received update_requests:", requests);
+				const container = document.getElementById("requests");
+				container.innerHTML = "";
+				requests.forEach(({ socketId, senderName, isTalking, isPaused }) => {
+					const div = document.createElement("div");
+					div.className = "request";
+					div.innerHTML = `
+                    <p>${senderName} (Talking: ${isTalking}, Paused: ${isPaused})</p>
+                    <button class="accept-btn" onclick="acceptRequest('${socketId}')">Accept</button>
+                    <button class="reject-btn" onclick="rejectRequest('${socketId}')">Reject</button>
+                    <button class="pause-btn" onclick="pauseRequest('${socketId}', ${!isPaused})">${
+						isPaused ? "Resume" : "Pause"
+					}</button>
+                    <button class="stop-btn" onclick="stopRequest('${socketId}')">Stop</button>
+                `;
+					container.appendChild(div);
+				});
+			});
+
+			socket.on(
+				"transport_connect",
+				({ id, iceParameters, iceCandidates, dtlsParameters }) => {
+					peerConnection = new RTCPeerConnection({
+						iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+					});
+
+					peerConnection.onicecandidate = (event) => {
+						if (event.candidate) {
+							socket.emit("ice_candidate", { candidate: event.candidate });
+						}
+					};
+
+					peerConnection.ontrack = (event) => {
+						const stream = event.streams[0];
+						const audio = new Audio();
+						audio.srcObject = stream;
+						audio.play();
+						console.log("Audio stream received and playing");
+					};
+
+					peerConnection.setRemoteDescription({
+						type: "offer",
+						sdp: iceParameters,
+					});
+					peerConnection.addIceCandidate(iceCandidates);
+					const answer = peerConnection.createAnswer();
+					peerConnection.setLocalDescription(answer);
+					socket.emit("answer", { sdp: answer });
+				}
+			);
+
+			socket.on("consume", async ({ id, producerId, kind, rtpParameters }) => {
+				const { rtpCapabilities } = peerConnection;
+				socket.emit("consumer_connect", { rtpCapabilities });
+			});
+
+			function acceptRequest(socketId) {
+				socket.emit("accept_request", { socketId });
+			}
+
+			function rejectRequest(socketId) {
+				socket.emit("reject_request", { socketId });
+			}
+
+			function pauseRequest(socketId, isPaused) {
+				socket.emit("pause_request", { socketId, isPaused });
+			}
+
+			function stopRequest(socketId) {
+				socket.emit("stop_request", { socketId });
+			}
+		</script>
+	</head>
+	<body>
+		<h1>Admin Panel</h1>
+		<div id="status">Connecting...</div>
+		<div id="requests"></div>
+	</body>
 </html>
