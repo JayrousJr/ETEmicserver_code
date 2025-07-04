@@ -9,6 +9,9 @@ const io = new Server(server, { cors: { origin: "*" } });
 
 let worker, router, transport, producer, consumer;
 
+const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "145.223.98.156";
+
 async function setupMediasoup() {
 	worker = await mediasoup.createWorker();
 	router = await worker.createRouter({
@@ -55,7 +58,7 @@ io.on("connection", (socket) => {
 			console.log(`Request accepted for ${clients.get(socketId).senderName}`);
 
 			transport = await router.createWebRtcTransport({
-				listenIps: [{ ip: "145.223.98.156", announcedIp: receiverIP }],
+				listenIps: [{ ip: `${HOST}`, announcedIp: receiverIP }],
 				enableUdp: true,
 				enableTcp: true,
 				preferUdp: true,
@@ -80,7 +83,7 @@ io.on("connection", (socket) => {
 		// Forward stream to admin
 		if (adminSocketId) {
 			const adminTransport = await router.createWebRtcTransport({
-				listenIps: [{ ip: "145.223.98.156", announcedIp: receiverIP }],
+				listenIps: [{ ip: `${HOST}`, announcedIp: receiverIP }],
 				enableUdp: true,
 				enableTcp: true,
 				preferUdp: true,
@@ -166,6 +169,6 @@ io.on("connection", (socket) => {
 	});
 });
 
-server.listen(3000, () => {
-	console.log("Server running on port 3000");
+server.listen(PORT, HOST, () => {
+	console.log(`🚀 Server running at http://${HOST}:${PORT}`);
 });
